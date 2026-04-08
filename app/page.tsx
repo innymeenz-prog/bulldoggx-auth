@@ -54,10 +54,10 @@ export default function Home() {
 
     setStatus("Setting up your wallet...");
 
-    const smartWallet = user.linked_accounts.find(
+    const smartWallet = user.linkedAccounts.find(
       (account: any) => account.type === "smart_wallet"
     );
-    const embeddedWallet = user.linked_accounts.find(
+    const embeddedWallet = user.linkedAccounts.find(
       (account: any) =>
         account.type === "wallet" && account.walletClientType === "privy"
     );
