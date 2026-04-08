@@ -1,19 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { usePrivy } from "@privy-io/react-auth";
+
+interface LinkedAccount {
+  type: string;
+  address?: string;
+  walletClientType?: string;
+  email?: string;
+  subject?: string;
+}
 
 export default function Home() {
   const { ready, authenticated, user, login, logout } = usePrivy();
   const [status, setStatus] = useState("Loading...");
   const [error, setError] = useState<string | null>(null);
+  const hasRedirected = useRef(false);
+  const pollCount = useRef(0);
 
   const getQueryParam = (name: string): string | null => {
     if (typeof window === "undefined") return null;
     return new URLSearchParams(window.location.search).get(name);
   };
 
-  // Handle logout action separately
+  // Handle logout action
   useEffect(() => {
     if (!ready) return;
     if (getQueryParam("action") === "logout" && authenticated) {
@@ -39,69 +49,86 @@ export default function Home() {
       const timer = setTimeout(() => {
         try {
           login();
-        } catch (e: any) {
-          setError(e?.message || "Failed to open login");
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : "Failed to open login";
+          setError(msg);
         }
       }, 400);
       return () => clearTimeout(timer);
     }
   }, [ready, authenticated, login]);
 
-  // After login, extract wallet data and redirect back to Bubble
+  // After login, poll for wallet then redirect
   useEffect(() => {
     if (!ready || !authenticated || !user) return;
     if (getQueryParam("action") === "logout") return;
+    if (hasRedirected.current) return;
 
-    setStatus("Setting up your wallet...");
+    const tryRedirect = () => {
+      const accounts = user.linkedAccounts as unknown as LinkedAccount[];
 
-    const smartWallet = user.linkedAccounts.find(
-      (account: any) => account.type === "smart_wallet"
-    );
-    const embeddedWallet = user.linkedAccounts.find(
-      (account: any) =>
-        account.type === "wallet" && account.walletClientType === "privy"
-    );
+      const smartWallet = accounts.find((a) => a.type === "smart_wallet");
+      const embeddedWallet = accounts.find(
+        (a) => a.type === "wallet" && a.walletClientType === "privy"
+      );
 
-    const walletAddress =
-      (smartWallet as any)?.address || (embeddedWallet as any)?.address;
+      // Prefer smart wallet, fall back to embedded wallet
+      const walletAddress = smartWallet?.address || embeddedWallet?.address;
 
-    if (!walletAddress) {
-      setStatus("Finalizing wallet creation...");
-      const retry = setTimeout(() => window.location.reload(), 1500);
-      return () => clearTimeout(retry);
-    }
+      if (!walletAddress) {
+        pollCount.current += 1;
+        if (pollCount.current >= 10) {
+          setError(
+            "Wallet creation is taking longer than expected. Please refresh and try again."
+          );
+          return;
+        }
+        setStatus(`Setting up your wallet... (${pollCount.current}/10)`);
+        setTimeout(tryRedirect, 1000);
+        return;
+      }
 
-    const email =
-      user.email?.address ||
-      (user.google as any)?.email ||
-      (user.discord as any)?.email ||
-      "";
-    const googleId = (user.google as any)?.subject || "";
-    const discordId = (user.discord as any)?.subject || "";
-    const twitterId = (user.twitter as any)?.subject || "";
-    const privyUserId = user.id;
+      hasRedirected.current = true;
+      setStatus("Redirecting you back...");
 
-    let provider = "email";
-    if (user.google) provider = "google";
-    else if (user.discord) provider = "discord";
-    else if (user.twitter) provider = "twitter";
+      const googleAccount = accounts.find((a) => a.type === "google_oauth");
+      const discordAccount = accounts.find((a) => a.type === "discord_oauth");
+      const twitterAccount = accounts.find((a) => a.type === "twitter_oauth");
+      const emailAccount = accounts.find((a) => a.type === "email");
 
-    const baseReturn =
-      getQueryParam("return") || "https://bulldoggx.com/version-test";
+      const email =
+        emailAccount?.email ||
+        googleAccount?.email ||
+        discordAccount?.email ||
+        "";
+      const googleId = googleAccount?.subject || "";
+      const discordId = discordAccount?.subject || "";
+      const twitterId = twitterAccount?.subject || "";
+      const privyUserId = user.id;
 
-    const params = new URLSearchParams({
-      view: "onboarding",
-      wallet: walletAddress,
-      email: email,
-      privy_id: privyUserId,
-      provider: provider,
-      google_id: googleId,
-      discord_id: discordId,
-      twitter_id: twitterId,
-    });
+      let provider = "email";
+      if (googleAccount) provider = "google";
+      else if (discordAccount) provider = "discord";
+      else if (twitterAccount) provider = "twitter";
 
-    setStatus("Redirecting you back...");
-    window.location.href = `${baseReturn}?${params.toString()}`;
+      const baseReturn =
+        getQueryParam("return") || "https://bulldoggx.com/version-test";
+
+      const params = new URLSearchParams({
+        view: "onboarding",
+        wallet: walletAddress,
+        email: email,
+        privy_id: privyUserId,
+        provider: provider,
+        google_id: googleId,
+        discord_id: discordId,
+        twitter_id: twitterId,
+      });
+
+      window.location.href = `${baseReturn}?${params.toString()}`;
+    };
+
+    tryRedirect();
   }, [ready, authenticated, user]);
 
   return (
