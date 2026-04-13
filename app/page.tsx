@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { usePrivy } from "@privy-io/react-auth";
+import { useSmartWallets } from "@privy-io/react-auth/smart-wallets";
 
 interface LinkedAccount {
   type: string;
@@ -13,6 +14,7 @@ interface LinkedAccount {
 
 export default function Home() {
   const { ready, authenticated, user, login, logout } = usePrivy();
+  const { client: smartWalletClient } = useSmartWallets();
   const [status, setStatus] = useState("Loading...");
   const [error, setError] = useState<string | null>(null);
   const hasRedirected = useRef(false);
@@ -58,32 +60,26 @@ export default function Home() {
     }
   }, [ready, authenticated, login]);
 
-  // After login, poll for wallet then redirect
+  // After login, wait for smart wallet then redirect
   useEffect(() => {
     if (!ready || !authenticated || !user) return;
     if (getQueryParam("action") === "logout") return;
     if (hasRedirected.current) return;
 
     const tryRedirect = () => {
-      const accounts = user.linkedAccounts as unknown as LinkedAccount[];
-
-      const smartWallet = accounts.find((a) => a.type === "smart_wallet");
-      const embeddedWallet = accounts.find(
-        (a) => a.type === "wallet" && a.walletClientType === "privy"
-      );
-
-      // Prefer smart wallet, fall back to embedded wallet
-      const walletAddress = smartWallet?.address || embeddedWallet?.address;
+      // Use the smart wallet address from useSmartWallets() — this matches
+      // what sign/page.tsx uses for msg.sender on-chain.
+      const walletAddress = smartWalletClient?.account?.address;
 
       if (!walletAddress) {
         pollCount.current += 1;
-        if (pollCount.current >= 10) {
+        if (pollCount.current >= 20) {
           setError(
-            "Wallet creation is taking longer than expected. Please refresh and try again."
+            "Smart wallet provisioning is taking longer than expected. Please refresh and try again."
           );
           return;
         }
-        setStatus(`Setting up your wallet... (${pollCount.current}/10)`);
+        setStatus(`Setting up your smart wallet... (${pollCount.current}/20)`);
         setTimeout(tryRedirect, 1000);
         return;
       }
@@ -91,6 +87,7 @@ export default function Home() {
       hasRedirected.current = true;
       setStatus("Redirecting you back...");
 
+      const accounts = user.linkedAccounts as unknown as LinkedAccount[];
       const googleAccount = accounts.find((a) => a.type === "google_oauth");
       const discordAccount = accounts.find((a) => a.type === "discord_oauth");
       const twitterAccount = accounts.find((a) => a.type === "twitter_oauth");
@@ -129,7 +126,7 @@ export default function Home() {
     };
 
     tryRedirect();
-  }, [ready, authenticated, user]);
+  }, [ready, authenticated, user, smartWalletClient]);
 
   return (
     <main
