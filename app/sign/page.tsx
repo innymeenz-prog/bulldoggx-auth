@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useSmartWallets } from "@privy-io/react-auth/smart-wallets";
-import { encodeFunctionData, parseUnits } from "viem";
+import { createPublicClient, http, encodeFunctionData, parseUnits, decodeEventLog } from "viem";
 import { baseSepolia } from "viem/chains";
 
 const BGX_CONTRACT = "0x958BdE531dB5E9E566cb3690D65f8bE7693E9D22";
@@ -39,6 +39,17 @@ const ESCROW_ABI = [
     outputs: [],
     stateMutability: "nonpayable",
     type: "function",
+  },
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, name: "matchId", type: "uint256" },
+      { indexed: true, name: "playerA", type: "address" },
+      { indexed: true, name: "playerB", type: "address" },
+      { indexed: false, name: "stake", type: "uint256" },
+    ],
+    name: "MatchCreated",
+    type: "event",
   },
 ] as const;
 
@@ -147,6 +158,39 @@ export default function SignPage() {
       data: createMatchData,
     });
 
+    // Step 3: Wait for receipt and extract chain_match_id from MatchCreated event
+    setStatus("Confirming on-chain...");
+
+    const publicClient = createPublicClient({
+      chain: baseSepolia,
+      transport: http(),
+    });
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+    let chainMatchId: string | null = null;
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== ESCROW_CONTRACT.toLowerCase()) continue;
+      try {
+        const decoded = decodeEventLog({
+          abi: ESCROW_ABI,
+          data: log.data,
+          topics: log.topics,
+        });
+        if (decoded.eventName === "MatchCreated") {
+          chainMatchId = (decoded.args as { matchId: bigint }).matchId.toString();
+          break;
+        }
+      } catch {
+        // not our event, skip
+      }
+    }
+
+    if (!chainMatchId) {
+      setError("Transaction confirmed but could not extract matchId from receipt");
+      return;
+    }
+
     setStatus("Success! Redirecting...");
 
     const params = new URLSearchParams({
@@ -154,6 +198,7 @@ export default function SignPage() {
       tx_hash: txHash,
       tx_status: "success",
       tx_action: "createMatch",
+      chain_match_id: chainMatchId,
     });
     if (matchRowId) params.set("match_id", matchRowId);
 
