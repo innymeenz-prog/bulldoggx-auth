@@ -44,9 +44,9 @@ const ESCROW_ABI = [
     anonymous: false,
     inputs: [
       { indexed: true, name: "matchId", type: "uint256" },
-      { indexed: true, name: "playerA", type: "address" },
-      { indexed: true, name: "playerB", type: "address" },
-      { indexed: false, name: "stake", type: "uint256" },
+      { indexed: true, name: "player1", type: "address" },
+      { indexed: true, name: "player2", type: "address" },
+      { indexed: false, name: "seed", type: "uint256" },
     ],
     name: "MatchCreated",
     type: "event",
@@ -126,6 +126,11 @@ export default function SignPage() {
 
     if (!smartWalletClient) throw new Error("Smart wallet not ready");
 
+    const publicClient = createPublicClient({
+      chain: baseSepolia,
+      transport: http(),
+    });
+
     // Step 1: Approve BGX spending
     setStatus("Step 1/2: Approving BGX...");
 
@@ -135,12 +140,15 @@ export default function SignPage() {
       args: [ESCROW_CONTRACT as `0x${string}`, stakeAmount],
     });
 
-    await smartWalletClient.sendTransaction({
+    const approveTxHash = await smartWalletClient.sendTransaction({
       account: smartWalletClient.account,
       chain: baseSepolia,
       to: BGX_CONTRACT as `0x${string}`,
       data: approveData,
     });
+
+    // Wait for approve to confirm on-chain before proceeding
+    await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
 
     // Step 2: Create the match
     setStatus("Step 2/2: Creating match...");
@@ -160,11 +168,6 @@ export default function SignPage() {
 
     // Step 3: Wait for receipt and extract chain_match_id from MatchCreated event
     setStatus("Confirming on-chain...");
-
-    const publicClient = createPublicClient({
-      chain: baseSepolia,
-      transport: http(),
-    });
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
 
@@ -215,9 +218,19 @@ export default function SignPage() {
       return;
     }
 
+    if (!chainMatchId) {
+      setError("Missing chain_match_id for joinMatch");
+      return;
+    }
+
     const stakeAmount = parseUnits(stake, 18);
 
     if (!smartWalletClient) throw new Error("Smart wallet not ready");
+
+    const publicClient = createPublicClient({
+      chain: baseSepolia,
+      transport: http(),
+    });
 
     // Step 1: Approve BGX spending
     setStatus("Step 1/2: Approving BGX...");
@@ -228,20 +241,22 @@ export default function SignPage() {
       args: [ESCROW_CONTRACT as `0x${string}`, stakeAmount],
     });
 
-    await smartWalletClient.sendTransaction({
+    const approveTxHash = await smartWalletClient.sendTransaction({
       account: smartWalletClient.account,
       chain: baseSepolia,
       to: BGX_CONTRACT as `0x${string}`,
       data: approveData,
     });
 
+    // Wait for approve to confirm on-chain before joinMatch
+    setStatus("Confirming approval...");
+    await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
+
+    // Extra buffer to ensure RPC state is propagated before gas estimation
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
     // Step 2: Join the match
     setStatus("Step 2/2: Joining match...");
-
-    if (!chainMatchId) {
-      setError("Missing chain_match_id for joinMatch");
-      return;
-    }
 
     const joinMatchData = encodeFunctionData({
       abi: ESCROW_ABI,
