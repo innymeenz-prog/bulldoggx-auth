@@ -16,6 +16,17 @@ const ESCROW_ABI = parseAbi([
   "function adminResolve(uint256 matchId, address winner) external",
 ]);
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+// ── CORS preflight ─────────────────────────────────────────
+export async function OPTIONS() {
+  return NextResponse.json({}, { headers: CORS_HEADERS });
+}
+
 // ── handler ────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
@@ -26,14 +37,17 @@ export async function POST(req: NextRequest) {
     if (!privateKey) {
       return NextResponse.json(
         { error: "Server misconfigured: missing ADMIN_PRIVATE_KEY" },
-        { status: 500 }
+        { status: 500, headers: CORS_HEADERS }
       );
     }
 
     // 2. Check authorization header
     const authHeader = req.headers.get("authorization");
     if (apiSecret && authHeader !== `Bearer ${apiSecret}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401, headers: CORS_HEADERS }
+      );
     }
 
     // 3. Parse and validate request body
@@ -43,7 +57,7 @@ export async function POST(req: NextRequest) {
     if (!chain_match_id || !winner_wallet) {
       return NextResponse.json(
         { error: "Missing chain_match_id or winner_wallet" },
-        { status: 400 }
+        { status: 400, headers: CORS_HEADERS }
       );
     }
 
@@ -54,7 +68,7 @@ export async function POST(req: NextRequest) {
     } catch {
       return NextResponse.json(
         { error: "Invalid winner_wallet address" },
-        { status: 400 }
+        { status: 400, headers: CORS_HEADERS }
       );
     }
 
@@ -76,12 +90,15 @@ export async function POST(req: NextRequest) {
     });
 
     // 6. Return success
-    return NextResponse.json({
-      success: true,
-      tx_hash: txHash,
-      chain_match_id,
-      winner_wallet: winnerAddress,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        tx_hash: txHash,
+        chain_match_id,
+        winner_wallet: winnerAddress,
+      },
+      { headers: CORS_HEADERS }
+    );
   } catch (error: unknown) {
     console.error("adminResolve failed:", error);
 
@@ -90,7 +107,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(
       { error: "Transaction failed", details: message },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     );
   }
 }
