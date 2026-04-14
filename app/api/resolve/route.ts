@@ -9,7 +9,6 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
 
-// ── constants ──────────────────────────────────────────────
 const ESCROW_PROXY = "0xEAF4996ca75c2F2Db3c7695e41f1fA199Fd803A0";
 
 const ESCROW_ABI = parseAbi([
@@ -22,15 +21,12 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-// ── CORS preflight ─────────────────────────────────────────
 export async function OPTIONS() {
   return NextResponse.json({}, { headers: CORS_HEADERS });
 }
 
-// ── handler ────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
-    // 1. Validate env vars
     const privateKey = process.env.ADMIN_PRIVATE_KEY;
     const apiSecret = process.env.RESOLVE_API_SECRET;
 
@@ -41,7 +37,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Check authorization header
     const authHeader = req.headers.get("authorization");
     if (apiSecret && authHeader !== `Bearer ${apiSecret}`) {
       return NextResponse.json(
@@ -50,7 +45,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Parse and validate request body
     const body = await req.json();
     const { chain_match_id, winner_wallet } = body;
 
@@ -61,7 +55,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate winner_wallet is a real address
     let winnerAddress: `0x${string}`;
     try {
       winnerAddress = getAddress(winner_wallet);
@@ -72,7 +65,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Create wallet client with admin key
     const account = privateKeyToAccount(privateKey as Hex);
 
     const walletClient = createWalletClient({
@@ -81,26 +73,36 @@ export async function POST(req: NextRequest) {
       transport: http(),
     });
 
-    // 5. Send adminResolve transaction
-    const txHash = await walletClient.writeContract({
+    const matchId = BigInt(chain_match_id);
+
+    // First call — registers the vote
+    const tx1 = await walletClient.writeContract({
       address: ESCROW_PROXY,
       abi: ESCROW_ABI,
       functionName: "resolveMatch",
-      args: [BigInt(chain_match_id), winnerAddress],
+      args: [matchId, winnerAddress],
     });
 
-    // 6. Return success
+    // Second call — same signer, triggers payout
+    const tx2 = await walletClient.writeContract({
+      address: ESCROW_PROXY,
+      abi: ESCROW_ABI,
+      functionName: "resolveMatch",
+      args: [matchId, winnerAddress],
+    });
+
     return NextResponse.json(
       {
         success: true,
-        tx_hash: txHash,
+        tx_hash_1: tx1,
+        tx_hash_2: tx2,
         chain_match_id,
         winner_wallet: winnerAddress,
       },
       { headers: CORS_HEADERS }
     );
   } catch (error: unknown) {
-    console.error("adminResolve failed:", error);
+    console.error("resolveMatch failed:", error);
 
     const message =
       error instanceof Error ? error.message : "Unknown error";
