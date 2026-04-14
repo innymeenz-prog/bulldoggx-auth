@@ -74,22 +74,39 @@ export async function POST(req: NextRequest) {
     });
 
     const matchId = BigInt(chain_match_id);
+    let tx1: string | null = null;
+    let tx2: string | null = null;
 
     // First call — registers the vote
-    const tx1 = await walletClient.writeContract({
-      address: ESCROW_PROXY,
-      abi: ESCROW_ABI,
-      functionName: "resolveMatch",
-      args: [matchId, winnerAddress],
-    });
+    try {
+      tx1 = await walletClient.writeContract({
+        address: ESCROW_PROXY,
+        abi: ESCROW_ABI,
+        functionName: "resolveMatch",
+        args: [matchId, winnerAddress],
+      });
+    } catch {
+      // Vote may already be registered, continue to second call
+    }
 
-    // Second call — same signer, triggers payout
-    const tx2 = await walletClient.writeContract({
-      address: ESCROW_PROXY,
-      abi: ESCROW_ABI,
-      functionName: "resolveMatch",
-      args: [matchId, winnerAddress],
-    });
+    // Second call — triggers payout
+    try {
+      tx2 = await walletClient.writeContract({
+        address: ESCROW_PROXY,
+        abi: ESCROW_ABI,
+        functionName: "resolveMatch",
+        args: [matchId, winnerAddress],
+      });
+    } catch {
+      // If both fail, match may already be resolved
+    }
+
+    if (!tx1 && !tx2) {
+      return NextResponse.json(
+        { error: "Both resolve calls failed - match may already be resolved" },
+        { status: 500, headers: CORS_HEADERS }
+      );
+    }
 
     return NextResponse.json(
       {
