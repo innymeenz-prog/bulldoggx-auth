@@ -13,7 +13,7 @@ import { baseSepolia } from "viem/chains";
 const ESCROW_PROXY = "0xEAF4996ca75c2F2Db3c7695e41f1fA199Fd803A0";
 
 const ESCROW_ABI = parseAbi([
-  "function adminResolve(uint256 matchId, address winner) external",
+  "function resolveMatch(uint256 matchId, address winner) external",
 ]);
 
 const CORS_HEADERS = {
@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
     const txHash = await walletClient.writeContract({
       address: ESCROW_PROXY,
       abi: ESCROW_ABI,
-      functionName: "adminResolve",
+      functionName: "resolveMatch",
       args: [BigInt(chain_match_id), winnerAddress],
     });
 
