@@ -27,12 +27,13 @@ export async function OPTIONS() {
 
 export async function POST(req: NextRequest) {
   try {
-    const privateKey = process.env.ADMIN_PRIVATE_KEY;
+    const oracleKey = process.env.ADMIN_PRIVATE_KEY;
+    const sentinelKey = process.env.SENTINEL_PRIVATE_KEY;
     const apiSecret = process.env.RESOLVE_API_SECRET;
 
-    if (!privateKey) {
+    if (!oracleKey || !sentinelKey) {
       return NextResponse.json(
-        { error: "Server misconfigured: missing ADMIN_PRIVATE_KEY" },
+        { error: "Server misconfigured: missing signer keys" },
         { status: 500, headers: CORS_HEADERS }
       );
     }
@@ -65,54 +66,45 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const account = privateKeyToAccount(privateKey as Hex);
+    const matchId = BigInt(chain_match_id);
 
-    const walletClient = createWalletClient({
-      account,
+    // Signer 1 — Oracle/Admin
+    const oracleAccount = privateKeyToAccount(oracleKey as Hex);
+    const oracleClient = createWalletClient({
+      account: oracleAccount,
       chain: baseSepolia,
       transport: http(),
     });
 
-    const matchId = BigInt(chain_match_id);
-    let tx1: string | null = null;
-    let tx2: string | null = null;
+    // Signer 2 — Sentinel (different address)
+    const sentinelAccount = privateKeyToAccount(sentinelKey as Hex);
+    const sentinelClient = createWalletClient({
+      account: sentinelAccount,
+      chain: baseSepolia,
+      transport: http(),
+    });
 
-    // First call — registers the vote
-    try {
-      tx1 = await walletClient.writeContract({
-        address: ESCROW_PROXY,
-        abi: ESCROW_ABI,
-        functionName: "resolveMatch",
-        args: [matchId, winnerAddress],
-      });
-    } catch {
-      // Vote may already be registered, continue to second call
-    }
+    // First call — Oracle registers the vote
+    const tx1 = await oracleClient.writeContract({
+      address: ESCROW_PROXY,
+      abi: ESCROW_ABI,
+      functionName: "resolveMatch",
+      args: [matchId, winnerAddress],
+    });
 
-    // Second call — triggers payout
-    try {
-      tx2 = await walletClient.writeContract({
-        address: ESCROW_PROXY,
-        abi: ESCROW_ABI,
-        functionName: "resolveMatch",
-        args: [matchId, winnerAddress],
-      });
-    } catch {
-      // If both fail, match may already be resolved
-    }
-
-    if (!tx1 && !tx2) {
-      return NextResponse.json(
-        { error: "Both resolve calls failed - match may already be resolved" },
-        { status: 500, headers: CORS_HEADERS }
-      );
-    }
+    // Second call — Sentinel confirms and triggers payout
+    const tx2 = await sentinelClient.writeContract({
+      address: ESCROW_PROXY,
+      abi: ESCROW_ABI,
+      functionName: "resolveMatch",
+      args: [matchId, winnerAddress],
+    });
 
     return NextResponse.json(
       {
         success: true,
-        tx_hash_1: tx1,
-        tx_hash_2: tx2,
+        tx_hash_vote: tx1,
+        tx_hash_payout: tx2,
         chain_match_id,
         winner_wallet: winnerAddress,
       },
