@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   createWalletClient,
+  createPublicClient,
   http,
   parseAbi,
   getAddress,
@@ -68,6 +69,12 @@ export async function POST(req: NextRequest) {
 
     const matchId = BigInt(chain_match_id);
 
+    // Public client for waiting on tx confirmations
+    const publicClient = createPublicClient({
+      chain: baseSepolia,
+      transport: http(),
+    });
+
     // Signer 1 — Oracle/Admin
     const oracleAccount = privateKeyToAccount(oracleKey as Hex);
     const oracleClient = createWalletClient({
@@ -95,6 +102,14 @@ export async function POST(req: NextRequest) {
         functionName: "resolveMatch",
         args: [matchId, winnerAddress],
       });
+
+      // Wait for oracle tx to be confirmed before sentinel call
+      if (tx1) {
+        await publicClient.waitForTransactionReceipt({
+          hash: tx1 as `0x${string}`,
+          confirmations: 1,
+        });
+      }
     } catch (e) {
       console.log("Oracle call failed (may have already voted):", e instanceof Error ? e.message : e);
     }
