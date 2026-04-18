@@ -84,27 +84,45 @@ export async function POST(req: NextRequest) {
       transport: http(),
     });
 
+    let tx1: string | null = null;
+    let tx2: string | null = null;
+
     // First call — Oracle registers the vote
-    const tx1 = await oracleClient.writeContract({
-      address: ESCROW_PROXY,
-      abi: ESCROW_ABI,
-      functionName: "resolveMatch",
-      args: [matchId, winnerAddress],
-    });
+    try {
+      tx1 = await oracleClient.writeContract({
+        address: ESCROW_PROXY,
+        abi: ESCROW_ABI,
+        functionName: "resolveMatch",
+        args: [matchId, winnerAddress],
+      });
+    } catch (e) {
+      console.log("Oracle call failed (may have already voted):", e instanceof Error ? e.message : e);
+    }
 
     // Second call — Sentinel confirms and triggers payout
-    const tx2 = await sentinelClient.writeContract({
-      address: ESCROW_PROXY,
-      abi: ESCROW_ABI,
-      functionName: "resolveMatch",
-      args: [matchId, winnerAddress],
-    });
+    try {
+      tx2 = await sentinelClient.writeContract({
+        address: ESCROW_PROXY,
+        abi: ESCROW_ABI,
+        functionName: "resolveMatch",
+        args: [matchId, winnerAddress],
+      });
+    } catch (e) {
+      console.log("Sentinel call failed:", e instanceof Error ? e.message : e);
+    }
+
+    if (!tx1 && !tx2) {
+      return NextResponse.json(
+        { error: "Both resolve calls failed - match may already be resolved" },
+        { status: 500, headers: CORS_HEADERS }
+      );
+    }
 
     return NextResponse.json(
       {
         success: true,
-        tx_hash_vote: tx1,
-        tx_hash_payout: tx2,
+        tx_hash_oracle: tx1,
+        tx_hash_sentinel: tx2,
         chain_match_id,
         winner_wallet: winnerAddress,
       },
