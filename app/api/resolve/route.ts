@@ -12,6 +12,8 @@ import { baseSepolia } from "viem/chains";
 
 const ESCROW_PROXY = "0xEAF4996ca75c2F2Db3c7695e41f1fA199Fd803A0";
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const ESCROW_ABI = parseAbi([
   "function resolveMatch(uint256 matchId, address winner) external",
 ]);
@@ -133,6 +135,12 @@ export async function POST(req: NextRequest) {
       oracleError = e instanceof Error ? e.message : String(e);
       console.log("ORACLE CALL FAILED (may have already voted):", oracleError);
     }
+
+    // Sleep 4 seconds to ensure oracle's vote is in a fully sealed prior block
+    // before sentinel fires — prevents both txs landing in the same block,
+    // which causes the sentinel to revert.
+    console.log("SLEEPING 4s before sentinel call...");
+    await sleep(4000);
 
     // Second call — Sentinel confirms and triggers payout
     try {
