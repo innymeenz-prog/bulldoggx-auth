@@ -69,6 +69,11 @@ export async function POST(req: NextRequest) {
 
     const matchId = BigInt(chain_match_id);
 
+    console.log("RESOLVE STARTED:", {
+      matchId: chain_match_id,
+      winner: winnerAddress,
+    });
+
     // Public client for waiting on tx confirmations
     const publicClient = createPublicClient({
       chain: baseSepolia,
@@ -93,9 +98,16 @@ export async function POST(req: NextRequest) {
 
     let tx1: string | null = null;
     let tx2: string | null = null;
+    let oracleError: string | null = null;
 
     // First call — Oracle registers the vote
     try {
+      console.log("ORACLE ATTEMPTING:", {
+        matchId: chain_match_id,
+        winner: winnerAddress,
+        from: oracleAccount.address,
+      });
+
       tx1 = await oracleClient.writeContract({
         address: ESCROW_PROXY,
         abi: ESCROW_ABI,
@@ -103,35 +115,97 @@ export async function POST(req: NextRequest) {
         args: [matchId, winnerAddress],
       });
 
+      console.log("ORACLE TX SUBMITTED:", tx1);
+
       // Wait for oracle tx to be confirmed before sentinel call
       if (tx1) {
-        await publicClient.waitForTransactionReceipt({
+        const receipt = await publicClient.waitForTransactionReceipt({
           hash: tx1 as `0x${string}`,
           confirmations: 1,
         });
+        console.log("ORACLE TX CONFIRMED:", {
+          hash: tx1,
+          status: receipt.status,
+          blockNumber: receipt.blockNumber.toString(),
+        });
       }
     } catch (e) {
-      console.log("Oracle call failed (may have already voted):", e instanceof Error ? e.message : e);
+      oracleError = e instanceof Error ? e.message : String(e);
+      console.log("ORACLE CALL FAILED (may have already voted):", oracleError);
     }
 
     // Second call — Sentinel confirms and triggers payout
     try {
+      console.log("SENTINEL ATTEMPTING:", {
+        matchId: chain_match_id,
+        winner: winnerAddress,
+        from: sentinelAccount.address,
+        oracleTxHash: tx1,
+      });
+
       tx2 = await sentinelClient.writeContract({
         address: ESCROW_PROXY,
         abi: ESCROW_ABI,
         functionName: "resolveMatch",
         args: [matchId, winnerAddress],
       });
+
+      console.log("SENTINEL TX SUBMITTED:", tx2);
+
+      // Wait for sentinel tx to be confirmed — this is the payout tx
+      if (tx2) {
+        const receipt = await publicClient.waitForTransactionReceipt({
+          hash: tx2 as `0x${string}`,
+          confirmations: 1,
+        });
+        console.log("SENTINEL TX CONFIRMED:", {
+          hash: tx2,
+          status: receipt.status,
+          blockNumber: receipt.blockNumber.toString(),
+        });
+
+        // If the tx was included but reverted, surface that as a failure
+        if (receipt.status !== "success") {
+          return NextResponse.json(
+            {
+              error: "Sentinel tx reverted on-chain",
+              tx_hash_oracle: tx1,
+              tx_hash_sentinel: tx2,
+              oracle_error: oracleError,
+            },
+            { status: 500, headers: CORS_HEADERS }
+          );
+        }
+      }
     } catch (e) {
-      console.log("Sentinel call failed:", e instanceof Error ? e.message : e);
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("SENTINEL FAILED:", msg);
+      return NextResponse.json(
+        {
+          error: "Sentinel call failed",
+          details: msg,
+          tx_hash_oracle: tx1,
+          oracle_error: oracleError,
+        },
+        { status: 500, headers: CORS_HEADERS }
+      );
     }
 
     if (!tx1 && !tx2) {
       return NextResponse.json(
-        { error: "Both resolve calls failed - match may already be resolved" },
+        {
+          error: "Both resolve calls failed - match may already be resolved",
+          oracle_error: oracleError,
+        },
         { status: 500, headers: CORS_HEADERS }
       );
     }
+
+    console.log("RESOLVE SUCCESS:", {
+      matchId: chain_match_id,
+      tx_hash_oracle: tx1,
+      tx_hash_sentinel: tx2,
+    });
 
     return NextResponse.json(
       {
